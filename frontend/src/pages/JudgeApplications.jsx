@@ -1,52 +1,47 @@
 import React from 'react';
-import { Badge } from '../components/UI';
+import { useNavigate } from 'react-router-dom';
+import Layout from '../components/Layout';
 
-const ApplicationRow = ({ name, tournament, status, statusType }) => (
-  <div className="flex justify-between items-center p-4 border rounded-xl bg-white hover:shadow-sm transition-shadow mb-3 cursor-pointer">
-    <div className="font-medium w-1/3">{name}</div>
-    <div className="text-gray-500 w-1/3 text-center">{tournament}</div>
-    <div className="w-1/3 text-right">
-      <Badge type={statusType} text={status} />
-    </div>
-  </div>
-);
+const data = [
+  { section: 'необработанных заявок · 1', rows: [
+    { id: 'new', name: 'Новиков Кирилл Витальевич', status: 'новая', type: 'new' },
+    { id: 'withdraw', name: 'Ахметов Тимур Русланович', status: 'снятие слота', type: 'withdraw' },
+  ]},
+  { section: 'ответы · 2', rows: [
+    { id: 'yes', name: 'Лебедев Игорь Максимович', status: 'да', type: 'yes' },
+    { id: 'no', name: 'Лебедева Павловна Дарья', status: 'нет', type: 'no' },
+    { id: 'wait1', name: 'Орлова Мария Викторовна', status: 'ждем', type: 'wait' },
+    { id: 'wait2', name: 'Соколов Андреевич Дмитрий', status: 'ждем', type: 'wait' },
+  ]},
+  { section: 'Всего заявок · много', rows: [
+    { id: 'ok1', name: 'Морозов Павлович Артём', status: 'подтверждена', type: 'confirmed' },
+    { id: 'ok2', name: 'Морозов Павлович Артём', status: 'подтверждена', type: 'confirmed' },
+    { id: 'ok3', name: 'Новиков Витальевич Кирилл', status: 'подтверждена', type: 'confirmed' },
+  ]},
+];
 
 export default function JudgeApplications() {
+  const navigate = useNavigate();
   return (
-    <div className="min-h-screen bg-gray-50 p-8 max-w-5xl mx-auto">
-      <header className="flex justify-between items-center mb-12">
-        <div className="flex items-center gap-4">
-          <div className="w-10 h-10 border rounded bg-white"></div>
-          <span className="font-bold text-lg">USN · Заявки судей</span>
+    <Layout title="USN · Заявки судей" rightContent="кликабельный прототип">
+      <div className="judge-applications-page">
+        <div className="judge-applications-toolbar">
+          <button onClick={() => navigate('/organizer')}>← Назад</button>
+          <span>Выбранная роль: судья</span>
         </div>
-        <span className="text-gray-400 text-sm">кликабельный прототип</span>
-      </header>
-
-      <div className="space-y-8">
-        {/* Секция 1 */}
-        <section>
-          <div className="inline-block bg-gray-200 text-gray-600 px-3 py-1 rounded-full text-sm mb-4">необработанных заявок · 1</div>
-          <ApplicationRow name="Фамилия Имя Отчество" tournament="Название 1 · классика" status="новая" statusType="default" />
-          <ApplicationRow name="Фамилия Имя Отчество" tournament="Название 1 · классика" status="снятие слота" statusType="danger" />
-        </section>
-
-        {/* Секция 2 */}
-        <section>
-          <div className="inline-block bg-gray-200 text-gray-600 px-3 py-1 rounded-full text-sm mb-4">ответы · 1</div>
-          <ApplicationRow name="Фамилия Имя Отчество" tournament="Название 1 · классика" status="да" statusType="success" />
-          <ApplicationRow name="Фамилия Имя Отчество" tournament="Название 1 · классика" status="нет" statusType="danger" />
-          <ApplicationRow name="Фамилия Имя Отчество" tournament="Название 1 · классика" status="ждем" statusType="warning" />
-          <ApplicationRow name="Фамилия Имя Отчество" tournament="Название 1 · классика" status="ждем" statusType="warning" />
-        </section>
-
-        {/* Секция 3 */}
-        <section>
-          <div className="inline-block bg-gray-200 text-gray-600 px-3 py-1 rounded-full text-sm mb-4">Всего заявок · много</div>
-          <ApplicationRow name="Фамилия Имя Отчество" tournament="Название 1 · классика" status="подтверждена" statusType="success" />
-          <ApplicationRow name="Фамилия Имя Отчество" tournament="Название 1 · классика" status="подтверждена" statusType="success" />
-          <ApplicationRow name="Фамилия Имя Отчество" tournament="Название 1 · классика" status="подтверждена" statusType="success" />
-        </section>
+        {data.map(group => (
+          <section className="judge-application-group" key={group.section}>
+            <h2>{group.section}</h2>
+            {group.rows.map(row => (
+              <button className="judge-application-row" key={row.id} onClick={() => navigate(`/judge-applications/${row.id}`, { state: row })}>
+                <strong>{row.name}</strong>
+                <span>{row.id === 'new' ? 'Кубок «Осень-2026» · классика' : 'Кубок «Осень-2026» · классика'}</span>
+                <b className={`judge-status ${row.type}`}>{row.status}</b>
+              </button>
+            ))}
+          </section>
+        ))}
       </div>
-    </div>
+    </Layout>
   );
 }

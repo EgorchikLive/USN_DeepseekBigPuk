@@ -1,1 +1,0 @@
-from .models import Competition, UserRegistration, JudgeSlotAvailability, AIAllocation
