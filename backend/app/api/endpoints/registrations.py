@@ -7,6 +7,7 @@ from app.schemas.registration import (
 )
 from app.services.validation import validate_registration
 from app.services.django_sync import sync_with_django
+from app.services.spreadsheet_data import SpreadsheetDataError, get_spreadsheet_data
 
 router = APIRouter()
 
@@ -31,7 +32,21 @@ async def create_registration(data: RegistrationCreate, db: dict = Depends(get_d
         existing.linked_participant_id = data.linked_participant_id
         return existing.to_dict()
 
-    validate_registration(data)
+    try:
+        spreadsheet_data = await get_spreadsheet_data()
+    except SpreadsheetDataError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    competition = next(
+        (
+            item
+            for item in spreadsheet_data["tournaments"]
+            if item["id"] == data.competition_id
+        ),
+        None,
+    )
+    if competition is None:
+        raise HTTPException(status_code=404, detail="Турнир не найден в таблице.")
+    validate_registration(data, competition, db)
 
     new_reg = UserRegistration(
         competition_id=data.competition_id,

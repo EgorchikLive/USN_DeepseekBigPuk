@@ -1,433 +1,607 @@
-import React, { useCallback, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { Badge, Button } from '../components/UI';
-import { AlertTriangle, Check, Clock, RefreshCw } from 'lucide-react';
+import { AlertTriangle, CalendarDays, RefreshCw } from 'lucide-react';
+import { Button } from '../components/UI';
 import apiClient from '../api/client';
+import {
+  fetchJudgeApplications,
+  fetchTournament,
+  getSpreadsheetError,
+} from '../api/spreadsheet';
 
-// --- Компоненты внутри файла ---
-
-// Ячейка карты доступности
-const SlotCell = ({ status, count, max }) => {
-  const statusConfig = {
-    success: {
-      icon: <Check size={16} />,
-      label: 'основные судьи',
-      subLabel: '✓ резервный судья',
-    },
-    warning: {
-      icon: <Clock size={16} />,
-      label: 'основные судьи',
-      subLabel: '⏳ резервный судья',
-    },
-    danger: {
-      icon: <AlertTriangle size={16} />,
-      label: 'основные судьи',
-      subLabel: '⚠ резервный судья',
-    },
-  };
-
-  const cfg = statusConfig[status] || statusConfig.success;
-
-  return (
-    <div className={`availability-cell ${status}`}>
-      <div className="availability-count">
-        {cfg.icon}
-        <span>{count}/{max}</span>
-      </div>
-      <span className="availability-label">{cfg.label}</span>
-      <div className="availability-reserve">
-        {cfg.subLabel}
-      </div>
-    </div>
-  );
-};
-
-const rounds = ['утро', 'день', 'вечер'];
-const initialMapData = [
-  { row: 'Инвесторы', max: 9, slots: [ { s: 'warning', c: 8 }, { s: 'danger', c: 7 }, { s: 'success', c: 9 }, { s: 'success', c: 9 }, { s: 'success', c: 9 }, { s: 'success', c: 9 } ] },
-  { row: 'Авторы', max: 3, slots: [ { s: 'success', c: 3 }, { s: 'success', c: 3 }, { s: 'success', c: 3 }, { s: 'success', c: 3 }, { s: 'success', c: 3 }, { s: 'success', c: 3 } ] },
-  { row: 'Кадры', max: 3, slots: [ { s: 'success', c: 3 }, { s: 'success', c: 3 }, { s: 'success', c: 3 }, { s: 'success', c: 3 }, { s: 'success', c: 3 }, { s: 'success', c: 3 } ] },
-];
-
-function getSlotFromId(slotId) {
-  const [rowIndex, dateIndex, roundIndex] = (slotId || '').split('-').map(Number);
-  const row = initialMapData[rowIndex];
-  if (!row || ![1, 2].includes(dateIndex) || !rounds[roundIndex]) return null;
-
-  const slot = row.slots[(dateIndex - 1) * rounds.length + roundIndex];
-  return {
-    committee: row.row,
-    date: dateIndex === 1 ? '21.03' : '22.03',
-    round: rounds[roundIndex],
-    required_judges: row.max,
-    confirmed_judges: slot.c,
-    status: slot.s,
-  };
+function getPhaseGroup(slot) {
+  const phase = slot.phase || '';
+  if (/групп|^группа/i.test(phase)) return 'Групповой этап';
+  if (/финал|место|1\/\d+/i.test(phase)) return 'Плей-офф';
+  if (Number(slot.match_count) === 0) return 'Перерывы и резервы';
+  return phase || 'Этап не указан';
 }
 
-function buildAllocationSlots(mapData) {
-  return mapData.flatMap((row) => row.slots.map((slot, index) => ({
-    committee: row.row,
-    date: index < 3 ? '21.03' : '22.03',
-    round: rounds[index % 3],
-    required_judges: row.max,
-    confirmed_judges: slot.c,
-  })));
+function formatMatchCount(count) {
+  const plural = new Intl.PluralRules('ru').select(Number(count));
+  const word = {
+    one: 'матч',
+    few: 'матча',
+    many: 'матчей',
+    other: 'матча',
+  }[plural];
+  return `${count} ${word}`;
 }
-
-function applyAllocationMatrix(mapData, matrix) {
-  const slotsByKey = new Map(matrix.map((slot) => [
-    `${slot.committee}|${slot.date}|${slot.round}`,
-    slot,
-  ]));
-  return mapData.map((row) => ({
-    ...row,
-    slots: row.slots.map((slot, index) => {
-      const date = index < 3 ? '21.03' : '22.03';
-      const result = slotsByKey.get(`${row.row}|${date}|${rounds[index % 3]}`);
-      return result
-        ? {
-            ...slot,
-            c: result.confirmed_judges,
-            s: result.deficit ? 'danger' : 'success',
-          }
-        : slot;
-    }),
-  }));
-}
-
-// --- Основной компонент ---
 
 export default function OrganizerDashboard() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { competitionId = 'classic', slotId } = useParams();
-  const initialSelectedSlot = location.state?.selectedSlot || getSlotFromId(slotId);
-  const [loading, setLoading] = useState(false);
-  const [aiResult, setAiResult] = useState(location.state?.aiResult || null);
-  const [aiError, setAiError] = useState(location.state?.aiError || '');
-  const [selectedSlot, setSelectedSlot] = useState(initialSelectedSlot);
-  const [selectedDate, setSelectedDate] = useState(initialSelectedSlot?.date || '21.03');
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [mapData, setMapData] = useState(() => {
-    const data = location.state?.mapData || initialMapData.map((row) => ({
-      ...row,
-      slots: row.slots.map((slot) => ({ ...slot })),
-    }));
-    return location.state?.aiResult?.matrix
-      ? applyAllocationMatrix(data, location.state.aiResult.matrix)
-      : data;
+  const { competitionId } = useParams();
+  const [sourceState, setSourceState] = useState({
+    tournamentId: null,
+    tournament: null,
+    error: '',
   });
-  const tournament = location.state?.tournament || {
-    title: 'Кубок «Осень-2026»',
-    format: competitionId === 'express' ? 'экспресс' : 'классика',
-    date: competitionId === 'express' ? '22 марта 2026' : '21 марта 2026',
+  const loadingTournament = sourceState.tournamentId !== competitionId;
+  const tournament = loadingTournament ? null : sourceState.tournament;
+  const tournamentError = loadingTournament ? '' : sourceState.error;
+  const [scenarios, setScenarios] = useState({});
+  const initialScenario = {
+    selectedSlotId: location.state?.selectedSlotId || location.state?.selectedSlot?.id || '',
+    aiResult: location.state?.aiResult || null,
+    assignmentOverrides: location.state?.assignmentOverrides || {},
   };
-  const competitionUuid = competitionId === 'express'
-    ? '00000000-0000-0000-0000-000000000002'
-    : '00000000-0000-0000-0000-000000000001';
-  const totals = mapData.reduce((result, row) => {
-    result.required += row.max * row.slots.length;
-    result.confirmed += row.slots.reduce((sum, slot) => sum + slot.c, 0);
-    result.deficitSlots += row.slots.filter((slot) => slot.c < row.max).length;
-    return result;
-  }, { required: 0, confirmed: 0, deficitSlots: 0 });
+  const scenario = scenarios[competitionId] || initialScenario;
+  const { selectedSlotId, aiResult, assignmentOverrides } = scenario;
+  const [loadingAnalysis, setLoadingAnalysis] = useState(false);
+  const [analysisErrorState, setAnalysisErrorState] = useState({
+    tournamentId: null,
+    error: '',
+  });
+  const aiError = analysisErrorState.tournamentId === competitionId
+    ? analysisErrorState.error
+    : '';
+  const [applicationState, setApplicationState] = useState({
+    tournamentId: null,
+    applications: [],
+    error: '',
+  });
+  const applications = applicationState.tournamentId === competitionId
+    ? applicationState.applications
+    : [];
+  const applicationsError = applicationState.tournamentId === competitionId
+    ? applicationState.error
+    : '';
+  const applicationsLoading = applicationState.tournamentId !== competitionId;
+  const [showAllCandidates, setShowAllCandidates] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
-  const handleAllocate = useCallback(async (action = 'analyze') => {
-    setLoading(true);
-    setAiError('');
-    setAiResult(null);
-    try {
-      const response = await apiClient.post('/allocate', {
-        competition_id: competitionUuid,
-        action,
-        slots: buildAllocationSlots(mapData),
-        selected_slot: selectedSlot ? {
-          committee: selectedSlot.committee,
-          date: selectedSlot.date,
-          round: selectedSlot.round,
-          required_judges: selectedSlot.required_judges,
-          confirmed_judges: selectedSlot.confirmed_judges,
-        } : null,
+  const updateScenario = updates => {
+    setScenarios(current => {
+      const currentScenario = current[competitionId] || initialScenario;
+      const nextUpdates = typeof updates === 'function'
+        ? updates(currentScenario)
+        : updates;
+      return {
+        ...current,
+        [competitionId]: { ...currentScenario, ...nextUpdates },
+      };
+    });
+  };
+
+  useEffect(() => {
+    let active = true;
+    fetchTournament(competitionId)
+      .then(data => {
+        if (active) {
+          setSourceState({
+            tournamentId: competitionId,
+            tournament: data,
+            error: '',
+          });
+        }
+      })
+      .catch(error => {
+        if (active) {
+          setSourceState({
+            tournamentId: competitionId,
+            tournament: null,
+            error: getSpreadsheetError(error),
+          });
+        }
       });
-      setAiResult(response.data);
-      setMapData((current) => applyAllocationMatrix(current, response.data.matrix));
+    fetchJudgeApplications(competitionId)
+      .then(items => {
+        if (active) {
+          setApplicationState({
+            tournamentId: competitionId,
+            applications: items,
+            error: '',
+          });
+        }
+      })
+      .catch(error => {
+        if (active) {
+          setApplicationState({
+            tournamentId: competitionId,
+            applications: [],
+            error: getSpreadsheetError(error),
+          });
+        }
+      });
+
+    return () => { active = false; };
+  }, [competitionId]);
+
+  const schedule = (tournament?.schedule || []).map(slot => {
+    const judgeIds = assignmentOverrides[slot.id] || slot.judge_ids || [];
+    return {
+      ...slot,
+      judge_ids: judgeIds,
+      assigned_judge_count: judgeIds.length,
+    };
+  });
+  const activeSlotId = schedule.some(slot => slot.id === selectedSlotId)
+    ? selectedSlotId
+    : schedule.find(slot => slot.match_count > 0)?.id
+    || schedule[0]?.id
+    || '';
+  const selectedSlot = schedule.find(slot => slot.id === activeSlotId) || null;
+  const unassignedSlotCount = schedule.filter(
+    slot => slot.assigned_judge_count === 0 && slot.match_count > 0,
+  ).length;
+  const assignedJudgeIds = new Set(schedule.flatMap(slot => slot.judge_ids.map(String)));
+  const assignedJudgeCount = assignedJudgeIds.size;
+  const candidates = applications.filter(
+    application => !selectedSlot?.judge_ids.some(
+      judgeId => String(judgeId) === String(application.judge_id),
+    ),
+  );
+  const groups = new Map();
+  for (const slot of schedule) {
+    const group = getPhaseGroup(slot);
+    if (!groups.has(group)) groups.set(group, []);
+    groups.get(group).push(slot);
+  }
+  const phaseGroups = [...groups.entries()];
+
+  const assignJudge = judgeId => {
+    if (!selectedSlot) return;
+    updateScenario(currentScenario => {
+      const currentJudgeIds = currentScenario.assignmentOverrides[selectedSlot.id]
+        || selectedSlot.judge_ids;
+      if (currentJudgeIds.includes(judgeId)) return {};
+      return {
+        assignmentOverrides: {
+          ...currentScenario.assignmentOverrides,
+          [selectedSlot.id]: [...currentJudgeIds, judgeId],
+        },
+      };
+    });
+    updateScenario({ notice: 'Изменение добавлено в локальный сценарий.' });
+  };
+
+  const removeJudge = judgeId => {
+    if (!selectedSlot) return;
+    updateScenario(currentScenario => {
+      const currentJudgeIds = currentScenario.assignmentOverrides[selectedSlot.id]
+        || selectedSlot.judge_ids;
+      return {
+        assignmentOverrides: {
+          ...currentScenario.assignmentOverrides,
+          [selectedSlot.id]: currentJudgeIds.filter(id => id !== judgeId),
+        },
+      };
+    });
+    updateScenario({ notice: 'Изменение добавлено в локальный сценарий.' });
+  };
+
+  const handleAllocate = async (action = 'analyze') => {
+    setLoadingAnalysis(true);
+    setAnalysisErrorState({ tournamentId: competitionId, error: '' });
+    updateScenario({ aiResult: null });
+    try {
+      const { data } = await apiClient.post('/allocate', {
+        tournament_id: competitionId,
+        action,
+        selected_slot_id: action === 'analyze' ? activeSlotId || null : null,
+      });
+      updateScenario({ aiResult: data });
     } catch (error) {
-      const detail = error.response?.data?.detail;
-      if (typeof detail === 'string') {
-        setAiError(detail);
-      } else if (error.response?.status) {
-        setAiError(`Ошибка API (${error.response.status}). Проверьте настройки LLM и backend.`);
-      } else {
-        setAiError('Backend недоступен. Запустите FastAPI из папки backend на порту 8000.');
-      }
+      setAnalysisErrorState({
+        tournamentId: competitionId,
+        error: getSpreadsheetError(error),
+      });
     } finally {
-      setLoading(false);
+      setLoadingAnalysis(false);
     }
-  }, [competitionUuid, mapData, selectedSlot]);
+  };
 
   const handleSave = () => {
-    setIsSyncing(true);
+    setIsSaving(true);
     try {
       window.sessionStorage.setItem(
         'usn-organizer-allocation',
-        JSON.stringify({ competitionId, mapData, aiResult }),
+        JSON.stringify({
+          tournamentId: competitionId,
+          selectedSlotId: activeSlotId,
+          aiResult,
+          assignmentOverrides,
+        }),
       );
       navigate(`/organizer/tournaments/${competitionId}/saved`, {
         state: {
           tournament,
-          mapData,
+          selectedSlotId: activeSlotId,
           aiResult,
-          selectedSlot,
+          assignmentOverrides,
           returnTo: location.pathname,
         },
       });
     } catch {
-      setAiError('Не удалось сохранить сценарий в текущей сессии браузера.');
+      setAnalysisErrorState({
+        tournamentId: competitionId,
+        error: 'Не удалось сохранить сценарий в текущей сессии браузера.',
+      });
     } finally {
-      setIsSyncing(false);
+      setIsSaving(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col font-sans organizer-dashboard">
-      
-      {/* Шапка */}
+    <div className="organizer-dashboard">
       <header className="organizer-header">
         <div className="organizer-brand">
-          <div className="w-10 h-10 border border-gray-300 rounded-lg flex items-center justify-center font-bold text-xs text-gray-400">Logo</div>
-          <span>USN · Панель организатора</span>
+          <div className="organizer-brand-mark">USN</div>
+          <span>Панель организатора</span>
         </div>
-        <div className="organizer-header-actions">
-          <div className="organizer-tournament-label">{tournament.title} · {tournament.format}</div>
-          <span className="organizer-confirmed-count">Судей подтверждено: <b>{totals.confirmed}/{totals.required}</b></span>
-          <Badge type="danger" text={`Слотов с дефицитом: ${totals.deficitSlots}`} className="organizer-deficit-badge" />
-          <button
-            className="organizer-applications-link"
-            onClick={() => navigate(`/organizer/tournaments/${competitionId}/applications`, {
-              state: {
-                tournament,
-                selectedSlot,
-                mapData,
-                allocationSlots: buildAllocationSlots(mapData),
-                returnTo: location.pathname,
-              },
-            })}
-          >
-            К заявкам судей <span>→</span>
-          </button>
-        </div>
+        {tournament && (
+          <div className="organizer-header-actions">
+            <div className="organizer-tournament-label">
+              {tournament.title}
+            </div>
+            <span className="organizer-header-count">
+              Судей в расписании <b>{assignedJudgeCount}</b>
+            </span>
+            <span className="organizer-header-count">
+              Без назначений <b>{unassignedSlotCount}</b>
+            </span>
+            <button
+              className="organizer-applications-link"
+              onClick={() => navigate(
+                `/organizer/tournaments/${competitionId}/applications`,
+                { state: { tournament, returnTo: location.pathname } },
+              )}
+            >
+              К заявкам <span>→</span>
+            </button>
+          </div>
+        )}
       </header>
 
-      {/* Основной контент */}
-      {location.state?.applicationUpdated && (
-        <p className="organizer-flow-notice" role="status">
-          Ответ по заявке сохранен. Сетка пересчитывается.
-        </p>
+      {loadingTournament && (
+        <p className="spreadsheet-state">Загружаем расписание из таблицы...</p>
       )}
-      <main className="organizer-dashboard-main">
-        
-        {/* Левая колонка (Карта доступности) */}
-        <div className="organizer-panel organizer-availability-panel">
-          <div className="organizer-panel-heading">
-            <h2>{tournament.date} · Карта доступности</h2>
-            <div className="organizer-date-switch">
-              {['21.03', '22.03'].map((date) => (
-                <button
-                  key={date}
-                  className={`organizer-date-button${selectedDate === date ? ' active' : ''}`}
-                  onClick={() => {
-                    setSelectedDate(date);
-                    setSelectedSlot(null);
-                    setAiResult(null);
-                    setAiError('');
-                    navigate(`/organizer/tournaments/${competitionId}`, {
-                      replace: true,
-                      state: { tournament, mapData },
-                    });
-                  }}
-                >
-                  {date}
-                </button>
-              ))}
-            </div>
-          </div>
+      {tournamentError && (
+        <p className="spreadsheet-state error" role="alert">{tournamentError}</p>
+      )}
 
-          {/* Легенда */}
-          <div className="organizer-legend">
-            <div className="organizer-legend-item">
-              <span className="organizer-legend-dot success"></span>
-              Состав подтвержден
+      {!loadingTournament && !tournamentError && tournament && (
+        <>
+          <section className="organizer-page-meta">
+            <div className="organizer-event-date">
+              <CalendarDays size={15} />
+              {tournament.dates.length
+                ? tournament.dates.join(' · ')
+                : 'Дата не указана'}
             </div>
-            <div className="organizer-legend-item">
-              <span className="organizer-legend-dot warning"></span>
-              Предложен состав
-            </div>
-            <div className="organizer-legend-item">
-              <span className="organizer-legend-dot danger"></span>
-              Не хватает кандидатов
-            </div>
-          </div>
+            <strong>{tournament.format}</strong>
+            <span className="organizer-response-count">
+              Ответы судей · <b>{applications.length}</b>
+            </span>
+          </section>
 
-          {/* Сетка карты */}
-          <div className="organizer-map-scroll">
-            <table className="organizer-map-table">
-              <thead>
-                <tr>
-                  <th className="organizer-map-label">Коллегия</th>
-                  {rounds.map((round) => <th key={round}>{selectedDate} · {round}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {mapData.map((row, rowIndex) => (
-                  <tr key={rowIndex}>
-                    <th scope="row" className="organizer-map-row-label">{row.row}</th>
-                    {row.slots.map((slot, colIndex) => {
-                      const date = colIndex < 3 ? '21.03' : '22.03';
-                      if (date !== selectedDate) return null;
-                      const round = rounds[colIndex % 3];
-                      const isSelected = selectedSlot?.committee === row.row
-                        && selectedSlot.date === date
-                        && selectedSlot.round === round;
+          <section className="organizer-legend">
+            <span><i className="assigned" /> Есть назначения из таблицы</span>
+            <span><i className="unassigned" /> Назначений нет</span>
+            <span><i className="selected" /> Выбранный слот</span>
+          </section>
 
-                      return (
-                      <td key={colIndex}>
-                        <button
-                          type="button"
-                          aria-pressed={isSelected}
-                          onClick={() => {
-                            const nextSelectedSlot = {
-                              committee: row.row,
-                              date,
-                              round,
-                              required_judges: row.max,
-                              confirmed_judges: slot.c,
-                              status: slot.s,
-                            };
-                            const nextSlotId = `${rowIndex}-${date === '21.03' ? 1 : 2}-${colIndex % 3}`;
-                            setSelectedSlot(nextSelectedSlot);
-                            setAiResult(null);
-                            setAiError('');
-                            navigate(
-                              `/organizer/tournaments/${competitionId}/slots/${nextSlotId}`,
-                              { state: { tournament, selectedSlot: nextSelectedSlot, mapData } },
-                            );
-                          }}
-                          className={`organizer-map-cell${isSelected ? ' selected' : ''}`}
-                        >
-                          <SlotCell status={slot.s} count={slot.c} max={row.max} />
-                        </button>
-                      </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <main className="organizer-dashboard-main">
+            <section className="organizer-panel organizer-timeline-panel">
+              <div className="organizer-panel-heading">
+                <div>
+                  <h2>Сетка расписания</h2>
+                  <p className="organizer-source-meta">Источник: Google Sheets</p>
+                </div>
+                <span className="organizer-source-tag">{schedule.length} слотов</span>
+              </div>
 
-          {/* Блок выбранного слота */}
-          <div className="organizer-selected-slot">
-            <div>
-              {selectedSlot ? (
-                <>
-                  <h4>Выбран слот: {selectedSlot.date} · {selectedSlot.round} · {selectedSlot.committee}</h4>
-                  <p>
-                    Требуется {selectedSlot.required_judges} судей · подтверждено {selectedSlot.confirmed_judges}
-                    {' · не хватает '}{Math.max(selectedSlot.required_judges - selectedSlot.confirmed_judges, 0)}
-                  </p>
-                  <small>Запустите анализ, чтобы получить пояснение для выбранного слота.</small>
-                </>
-              ) : (
-                <>
-                  <h4>Слот не выбран</h4>
-                  <p>Выберите ячейку карты, чтобы увидеть детали и запросить пояснение ИИ.</p>
-                </>
+              {tournament.problematic_slots && (
+                <details className="organizer-problem-note">
+                  <summary>Заметка из таблицы</summary>
+                  <p>{tournament.problematic_slots}</p>
+                </details>
               )}
-            </div>
-            {selectedSlot && (
-              <Badge
-                type={selectedSlot.confirmed_judges < selectedSlot.required_judges ? 'danger' : 'success'}
-                text={`дефицит: ${Math.max(selectedSlot.required_judges - selectedSlot.confirmed_judges, 0)}`}
-                className="organizer-deficit-badge"
-              />
-            )}
-          </div>
-        </div>
 
-        {/* Правая колонка (ИИ-ассистент) */}
-        <div className="organizer-panel organizer-assistant-panel">
-          <h2>ИИ-ассистент распределения</h2>
-          
-          {/* Блок дефицита */}
-          <div className="organizer-shortage-alert">
-            <div>
-              <AlertTriangle size={18} />
-              {selectedSlot
-                ? (selectedSlot.confirmed_judges < selectedSlot.required_judges ? 'Обнаружен дефицит' : 'Слот укомплектован')
-                : 'Выберите слот'}
-            </div>
-            <p>
-              {selectedSlot
-                ? `${selectedSlot.date} · ${selectedSlot.round} · ${selectedSlot.committee}: ${selectedSlot.confirmed_judges}/${selectedSlot.required_judges}`
-                : 'Нажмите на слот в карте доступности.'}
-            </p>
-            <small>Рекомендации и перерасчет выполняются по текущим данным сетки.</small>
-          </div>
-
-          <div className="organizer-scenarios">
-            <p>Для детального пояснения выберите слот. Для пересчета сетки используется число подтвержденных судей по каждому слоту.</p>
-          </div>
-
-          {/* Кнопки управления */}
-          <div className="organizer-assistant-actions">
-            <Button 
-              className="organizer-ai-button"
-              onClick={() => handleAllocate('analyze')}
-              disabled={loading || !selectedSlot}
-            >
-              {loading ? 'Запрашиваем анализ...' : 'Получить анализ ИИ'}
-            </Button>
-            <Button variant="secondary" className="organizer-recalculate-button" onClick={() => handleAllocate('recalculate')} disabled={loading}>
-              <RefreshCw size={16} className={loading ? 'animate-spin' : ''}/> 
-              Пересчитать сетку
-            </Button>
-          </div>
-
-          {/* Пояснение LLM */}
-          <div className="organizer-ai-explanation">
-            <h4>Пояснение ИИ (LLM)</h4>
-            <div>
-              {aiResult ? (
-                <p className="organizer-ai-result">{aiResult.justification}</p>
-              ) : aiError ? (
-                <p className="organizer-ai-error" role="alert">{aiError}</p>
-              ) : loading ? (
-                <p>Проверяем дефициты по слотам и сравниваем с агрегированными оценками из таблицы.</p>
+              {schedule.length === 0 ? (
+                <p className="spreadsheet-state">Для турнира нет записей расписания.</p>
               ) : (
-                <p className="organizer-ai-hint">Выберите слот для подробной информации или пересчитайте всю сетку.</p>
+                <div className="organizer-timeline-groups">
+                  {phaseGroups.map(([phase, slots]) => (
+                    <section className="organizer-timeline-group" key={phase}>
+                      <h3>{phase}</h3>
+                      <div className="organizer-time-grid">
+                        {slots.map(slot => (
+                          <button
+                            className={[
+                              'organizer-time-chip',
+                              slot.assigned_judge_count > 0 ? 'assigned' : 'unassigned',
+                              activeSlotId === slot.id ? 'selected' : '',
+                            ].filter(Boolean).join(' ')}
+                            key={slot.id}
+                            type="button"
+                            title={`${slot.time} · ${slot.assigned_judge_count} назначено`}
+                            aria-pressed={activeSlotId === slot.id}
+                            onClick={() => {
+                              updateScenario({ selectedSlotId: slot.id, aiResult: null });
+                              setAnalysisErrorState({ tournamentId: competitionId, error: '' });
+                            }}
+                          >
+                            <strong>{slot.time || 'Время не указано'}</strong>
+                            <span>{slot.assigned_judge_count} суд.</span>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
               )}
-              {aiResult?.summary && (
-                <p className="organizer-ai-summary">
-                  Дефицитных слотов: {aiResult.summary.shortage_slots}; не хватает мест: {aiResult.summary.unfilled_positions}.
+
+              <div className="organizer-selected-slot">
+                {selectedSlot ? (
+                  <div>
+                    <h4>{selectedSlot.time} · {selectedSlot.phase || 'Этап не указан'}</h4>
+                    <p>
+                      {selectedSlot.match_count
+                        ? formatMatchCount(selectedSlot.match_count)
+                        : 'Игровой блок не указан'}
+                      {' · '}{selectedSlot.assigned_judge_count} назначено
+                    </p>
+                  </div>
+                ) : (
+                  <div>
+                    <h4>Слот не выбран</h4>
+                    <p>Выберите время в сетке, чтобы посмотреть состав.</p>
+                  </div>
+                )}
+              </div>
+
+              {unassignedSlotCount > 0 && (
+                <p className="organizer-unassigned-note">
+                  <AlertTriangle size={15} />
+                  Игровых слотов без назначений: {unassignedSlotCount}. Норма судей на слот в источнике не указана.
                 </p>
               )}
-            </div>
-          </div>
-        </div>
-      </main>
+            </section>
 
-      {/* Подвал */}
-      <footer className="organizer-dashboard-footer">
-        <button className="organizer-dashboard-back" onClick={() => navigate('/organizer/tournaments')}>← К турнирам</button>
-        <Button 
-          className="organizer-sync-button"
-          onClick={handleSave}
-          disabled={isSyncing}
-        >
-          {isSyncing ? 'Сохраняем...' : 'Сохранить сценарий'}
-        </Button>
-      </footer>
+            <section className="organizer-panel organizer-assignment-panel">
+              <div className="organizer-panel-heading">
+                <div>
+                  <h2>Состав судей</h2>
+                  <p className="organizer-source-meta">
+                    {selectedSlot
+                      ? `Выбран слот · ${selectedSlot.time}`
+                      : 'Сначала выберите слот в сетке'}
+                  </p>
+                </div>
+                {selectedSlot && (
+                  <span className="organizer-assignment-count">
+                    {selectedSlot.assigned_judge_count}
+                  </span>
+                )}
+              </div>
+
+              <p className="organizer-local-note">
+                Изменения — только в локальном сценарии; в таблицу они не записываются.
+              </p>
+
+              {selectedSlot ? (
+                <>
+                  <section className="organizer-roster-section">
+                    <div className="organizer-roster-heading">
+                      <h3>Назначены в слот</h3>
+                      <span>{selectedSlot.judge_ids.length}</span>
+                    </div>
+                    {selectedSlot.judge_ids.length ? (
+                      <div className="organizer-roster-grid">
+                        {selectedSlot.judge_ids.map(judgeId => {
+                          const application = applications.find(
+                            item => String(item.judge_id) === String(judgeId),
+                          );
+                          return (
+                            <article className="organizer-judge-card assigned" key={judgeId}>
+                              <button
+                                type="button"
+                                className="organizer-judge-profile"
+                                disabled={!application}
+                                onClick={() => application && navigate(
+                                  `/organizer/tournaments/${competitionId}/applications/${encodeURIComponent(application.id)}`,
+                                  {
+                                    state: {
+                                      application,
+                                      tournament,
+                                      returnTo: location.pathname,
+                                    },
+                                  },
+                                )}
+                              >
+                                <b>{judgeId}</b>
+                                <small>
+                                  {application
+                                    ? [application.city, application.club].filter(Boolean).join(' · ') || 'Профиль без города и клуба'
+                                    : 'Ответ не найден'}
+                                </small>
+                              </button>
+                              <button
+                                type="button"
+                                className="organizer-remove-judge"
+                                aria-label={`Убрать судью ${judgeId}`}
+                                onClick={() => removeJudge(judgeId)}
+                              >
+                                Убрать
+                              </button>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="organizer-empty-roster">В источнике назначений на этот слот нет.</p>
+                    )}
+                  </section>
+
+                  <section className="organizer-roster-section candidates">
+                    <div className="organizer-roster-heading">
+                      <h3>Другие ответы судей</h3>
+                      <span>{candidates.length}</span>
+                    </div>
+                    <p className="organizer-candidate-hint">
+                      Перед добавлением проверьте доступность и занятость в других слотах.
+                    </p>
+                    {applicationsError ? (
+                      <p className="spreadsheet-state error" role="alert">{applicationsError}</p>
+                    ) : applicationsLoading ? (
+                      <p className="organizer-empty-roster">Загружаем ответы судей...</p>
+                    ) : applications.length === 0 ? (
+                      <p className="organizer-empty-roster">Ответы судей не найдены.</p>
+                    ) : candidates.length === 0 ? (
+                      <p className="organizer-empty-roster">Все ответы уже представлены в этом слоте.</p>
+                    ) : (
+                      <>
+                        <div className="organizer-roster-grid">
+                          {candidates.slice(0, showAllCandidates ? candidates.length : 3).map(application => (
+                            <article className="organizer-judge-card candidate" key={application.id}>
+                              <button
+                                type="button"
+                                className="organizer-judge-profile"
+                                onClick={() => navigate(
+                                  `/organizer/tournaments/${competitionId}/applications/${encodeURIComponent(application.id)}`,
+                                  {
+                                    state: {
+                                      application,
+                                      tournament,
+                                      returnTo: location.pathname,
+                                    },
+                                  },
+                                )}
+                              >
+                                <b>{application.judge_id}</b>
+                                <small>
+                                  {[application.city, application.club].filter(Boolean).join(' · ') || 'Профиль без города и клуба'}
+                                </small>
+                                <small>
+                                  {assignedJudgeIds.has(String(application.judge_id))
+                                    ? 'Есть в других слотах'
+                                    : 'Пока без назначений'}
+                                </small>
+                              </button>
+                              <button
+                                type="button"
+                                className="organizer-add-judge"
+                                onClick={() => assignJudge(application.judge_id)}
+                              >
+                                + Добавить
+                              </button>
+                            </article>
+                          ))}
+                        </div>
+                        {candidates.length > 3 && (
+                          <button
+                            type="button"
+                            className="organizer-show-candidates"
+                            onClick={() => setShowAllCandidates(current => !current)}
+                          >
+                            {showAllCandidates ? 'Свернуть список' : `Показать всех · ${candidates.length}`}
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </section>
+                  {scenario.notice && <p className="organizer-scenario-notice">{scenario.notice}</p>}
+                </>
+              ) : (
+                <div className="organizer-assignment-empty">
+                  Выберите слот, чтобы посмотреть назначенных судей и ответы-кандидаты.
+                </div>
+              )}
+
+              <div className="organizer-workflow-actions">
+                <button
+                  type="button"
+                  className="organizer-dashboard-back"
+                  onClick={() => navigate('/organizer/tournaments')}
+                >
+                  ← К турнирам
+                </button>
+                <Button
+                  className="organizer-sync-button"
+                  onClick={handleSave}
+                  disabled={isSaving}
+                >
+                  {isSaving ? 'Сохраняем...' : 'Сохранить сценарий'}
+                </Button>
+              </div>
+            </section>
+
+            <section className="organizer-panel organizer-assistant-panel">
+              <h2>Пояснение ИИ (LLM)</h2>
+              <div className="organizer-shortage-alert">
+                <div><AlertTriangle size={18} /> Источник анализа</div>
+                <p>
+                  Анализ строится по расписанию из таблицы; локальные изменения сценария в него не передаются.
+                </p>
+                <small>Имена, контакты и индивидуальные ответы судей в LLM не отправляются.</small>
+              </div>
+
+              <div className="organizer-ai-explanation">
+                <h4>Результат анализа</h4>
+                <div>
+                  {aiResult ? (
+                    <p className="organizer-ai-result">{aiResult.justification}</p>
+                  ) : aiError ? (
+                    <p className="organizer-ai-error" role="alert">{aiError}</p>
+                  ) : loadingAnalysis ? (
+                    <p>Сопоставляем расписание с агрегированными оценками из таблицы.</p>
+                  ) : (
+                    <p className="organizer-ai-hint">
+                      Выберите слот для анализа или запустите анализ всего расписания.
+                    </p>
+                  )}
+                  {aiResult?.summary && (
+                    <p className="organizer-ai-summary">
+                      Игровых слотов: {aiResult.summary.game_slot_count}; без назначений: {aiResult.summary.slots_without_assignments}.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="organizer-assistant-actions">
+                <Button
+                  className="organizer-ai-button"
+                  onClick={() => handleAllocate('analyze')}
+                  disabled={loadingAnalysis || !selectedSlot}
+                >
+                  {loadingAnalysis ? 'Анализируем...' : 'Анализ выбранного слота'}
+                </Button>
+                <Button
+                  variant="secondary"
+                  className="organizer-recalculate-button"
+                  onClick={() => handleAllocate('recalculate')}
+                  disabled={loadingAnalysis || schedule.length === 0}
+                >
+                  <RefreshCw size={16} className={loadingAnalysis ? 'animate-spin' : ''} />
+                  Всё расписание
+                </Button>
+              </div>
+            </section>
+          </main>
+        </>
+      )}
     </div>
   );
 }

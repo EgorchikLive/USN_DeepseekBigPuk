@@ -6,8 +6,6 @@ import httpx
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.services.synthetic_ratings import SYNTHETIC_RATING_SUMMARY
-
 
 class LLMSettings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -44,8 +42,9 @@ class LLMServiceError(Exception):
 
 async def generate_allocation_analysis(
     matrix: list[dict],
-    summary: dict[str, int],
+    summary: dict,
     action: str,
+    ratings_summary: list[dict],
     settings: LLMSettings | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
     selected_slot: dict | None = None,
@@ -76,12 +75,16 @@ async def generate_allocation_analysis(
         model = config.LLM_MODEL
         max_token_parameter = "max_tokens"
 
-    action_label = "перерасчёт" if action == "recalculate" else "первичный анализ"
+    action_label = (
+        "анализ всего расписания"
+        if action == "recalculate"
+        else "анализ выбранного слота"
+    )
     context = {
         "action": action_label,
-        "availability_matrix": matrix,
+        "schedule": matrix,
         "totals": summary,
-        "historical_synthetic_rating_summary": SYNTHETIC_RATING_SUMMARY,
+        "rating_summary_from_spreadsheet": ratings_summary,
         "selected_slot": selected_slot,
     }
     messages = [
@@ -89,14 +92,17 @@ async def generate_allocation_analysis(
             "role": "system",
             "content": (
                 "Ты аналитический помощник организатора турнира. "
-                "Проанализируй только переданные агрегированные числовые данные. "
+                "Используй только расписание и агрегированные оценки из таблицы. "
                 "Если передан selected_slot, начни с его подробного разбора. "
                 "Сначала укажи краткий вывод, затем дай от 1 до 3 конкретных "
                 "рекомендаций на русском языке. Не выдумывай имена, кандидатов, "
                 "доступность или факты, которых нет во входных данных. "
-                "Исторические оценки показывают только распределение баллов "
-                "1–3 и не подтверждают доступность конкретных судей. "
-                "Если данных недостаточно для решения, явно укажи это."
+                "Таблица не задаёт требуемое число судей на слот: не называй "
+                "слоты дефицитными и не делай вывод о достаточности состава. "
+                "Число назначенных судей — только факт назначения в расписании. "
+                "Оценки показывают распределение баллов 1–3 и не подтверждают "
+                "доступность конкретных судей. Если данных недостаточно для "
+                "решения, явно укажи это."
             ),
         },
         {

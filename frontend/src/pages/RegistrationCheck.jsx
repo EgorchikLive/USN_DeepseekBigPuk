@@ -1,10 +1,10 @@
-import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 
 export default function RegistrationCheck() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { email, competitionId, exists, data } = location.state || {};
+  const { email, competitionId, tournament, exists = false, data } = location.state || {};
 
   // Если перешли по прямой ссылке, возвращаем на старт
   if (!email) {
@@ -15,7 +15,7 @@ export default function RegistrationCheck() {
   return (
     <Layout 
       title="USN · Регистрация участника" 
-      rightContent={<span className="header-pill">Название {competitionId || '1'} | {competitionId === '2' ? 'экспресс' : competitionId === '3' ? 'команда' : 'классика'}</span>}
+      rightContent={<span className="header-pill">{tournament ? `${tournament.title} · ${tournament.format}` : 'Проверка участника'}</span>}
     >
       <div className="registration-shell">
         <div className="back-step">
@@ -24,21 +24,36 @@ export default function RegistrationCheck() {
         </div>
         <div className="card check-card">
           <div className="spinner" />
-          <h2>Проверяем email и телефон в базе...</h2>
-          <p className="subtitle">Ищем совпадения среди анкет прошлых турниров</p>
+          <h2>{exists ? 'Профиль найден' : 'Профиль не найден'}</h2>
+          <p className="subtitle">
+            {exists
+              ? 'Для этого турнира уже есть сохранённые данные.'
+              : 'Можно продолжить с новой анкетой.'}
+          </p>
           <div className="demo-options">
-            <button className="demo-option success" onClick={() => navigate('/register/profile', { state: { email, competitionId, isNew: false, data } })}>
-              <strong>✓ Демо: найдено в БД</strong>
-              поля подгрузятся сами<br />зелёная рамка
-            </button>
-            <button className="demo-option new" onClick={() => navigate('/register/profile', { state: { email, competitionId, isNew: true, data: {} } })}>
-              <strong>Демо: новый пользователь</strong>
-              анкета останется пустой<br />синяя рамка
-            </button>
-            <button className="demo-option" onClick={() => navigate('/register/already')}>
-              <strong>Заявка уже есть</strong>
-              статус заявки получен
-            </button>
+            {exists ? (
+              <>
+                <button className="demo-option success" onClick={() => navigate('/register/profile', {
+                  state: { email, competitionId, tournament, isNew: false, data },
+                })}>
+                  <strong>Продолжить с найденным профилем</strong>
+                  проверьте загруженные поля
+                </button>
+                <button className="demo-option" onClick={() => navigate('/register/already', {
+                  state: { competitionId, tournament, data },
+                })}>
+                  <strong>Перейти к существующей заявке</strong>
+                  статус из базы регистрации
+                </button>
+              </>
+            ) : (
+              <button className="demo-option new" onClick={() => navigate('/register/profile', {
+                state: { email, competitionId, tournament, isNew: true, data: {} },
+              })}>
+                <strong>Заполнить новую анкету</strong>
+                данные профиля будут введены вручную
+              </button>
+            )}
           </div>
         </div>
       </div>

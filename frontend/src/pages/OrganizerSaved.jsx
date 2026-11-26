@@ -27,6 +27,8 @@ export default function OrganizerSaved() {
               mapData: location.state?.mapData,
               aiResult: location.state?.aiResult,
               selectedSlot: location.state?.selectedSlot,
+              selectedSlotId: location.state?.selectedSlotId,
+              assignmentOverrides: location.state?.assignmentOverrides,
             },
           })}
         >

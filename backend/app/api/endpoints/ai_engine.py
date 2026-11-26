@@ -2,48 +2,90 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field, NonNegativeInt, PositiveInt
+from pydantic import BaseModel, Field
 
-from app.services.ai_allocator import allocate_judges
 from app.services.llm_assistant import (
     LLMNotConfiguredError,
     LLMServiceError,
     generate_allocation_analysis,
 )
+from app.services.spreadsheet_data import (
+    SpreadsheetDataError,
+    get_spreadsheet_data,
+)
 
 router = APIRouter()
 
 
-class SlotAvailability(BaseModel):
-    committee: str = Field(min_length=1, max_length=100)
-    date: str = Field(min_length=1, max_length=40)
-    round: str = Field(min_length=1, max_length=80)
-    required_judges: PositiveInt
-    confirmed_judges: NonNegativeInt
-
-
 class AllocationRequest(BaseModel):
-    competition_id: uuid.UUID
-    slots: list[SlotAvailability] = Field(min_length=1, max_length=200)
+    tournament_id: str = Field(min_length=1, max_length=40)
     action: Literal["analyze", "recalculate"] = "analyze"
-    selected_slot: SlotAvailability | None = None
+    selected_slot_id: str | None = None
 
 
 @router.post("/allocate")
 async def run_allocation(request: AllocationRequest):
-    matrix, summary = allocate_judges(
-        [slot.model_dump() for slot in request.slots]
+    try:
+        data = await get_spreadsheet_data()
+    except SpreadsheetDataError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    tournament = next(
+        (
+            item
+            for item in data["tournaments"]
+            if item["id"] == request.tournament_id
+        ),
+        None,
     )
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Турнир не найден в таблице.")
+
+    matrix = [
+        {
+            "slot_id": slot["id"],
+            "time": slot["time"],
+            "phase": slot["phase"],
+            "match_count": slot["match_count"],
+            "assigned_judge_count": slot["assigned_judge_count"],
+        }
+        for slot in tournament["schedule"]
+    ]
+    game_slots = [slot for slot in matrix if slot["match_count"] > 0]
+    summary = {
+        "tournament": tournament["title"],
+        "format": tournament["format"],
+        "dates": tournament["dates"],
+        "schedule_block_count": len(matrix),
+        "game_slot_count": len(game_slots),
+        "slots_with_assignments": sum(
+            slot["assigned_judge_count"] > 0 for slot in game_slots
+        ),
+        "slots_without_assignments": sum(
+            slot["assigned_judge_count"] == 0 for slot in game_slots
+        ),
+        "assigned_judges_total": sum(
+            slot["assigned_judge_count"] for slot in matrix
+        ),
+        "judge_application_count": len(tournament["applications"]),
+        "problematic_slots_recorded": bool(tournament["problematic_slots"]),
+    }
+    selected_slot = None
+    if request.selected_slot_id:
+        selected_slot = next(
+            (slot for slot in matrix if slot["slot_id"] == request.selected_slot_id),
+            None,
+        )
+        if selected_slot is None:
+            raise HTTPException(status_code=404, detail="Слот не найден в таблице.")
+
     try:
         analysis = await generate_allocation_analysis(
             matrix,
             summary,
             request.action,
-            selected_slot=(
-                request.selected_slot.model_dump()
-                if request.selected_slot
-                else None
-            ),
+            ratings_summary=data["ratings_summary"],
+            selected_slot=selected_slot,
         )
     except LLMNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

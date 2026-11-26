@@ -10,15 +10,15 @@ export default function ApplicationSent() {
     <Layout title="USN">
       <div className="sent-page">
         <div className="sent-circle">✓</div>
-        <h1>Заявка отправлена!</h1>
+        <h1>Форма подготовлена</h1>
         <div className="sent-pills">
-          <span>Статус: получена</span>
-          <span>ID заявки: REG-1042</span>
+          <span>Расписание загружено из Google Sheets</span>
         </div>
-        {isJudge && (
-          <p className="sent-text">Назначение слотов пройдет после того, как организатор подтвердит составы.<br />Уведомление придет по email после подтверждения.</p>
-        )}
-        {!isJudge && <p className="sent-text">Уведомление придёт вам на email после подтверждения заявки.</p>}
+        <p className="sent-text">
+          {isJudge
+            ? 'Выбранные слоты пока не записываются обратно в таблицу: её данные используются только для чтения.'
+            : 'Отправка заявок участников в Google Sheets пока не подключена.'}
+        </p>
         <div className="sent-actions">
           <button className="primary-button" onClick={() => navigate('/tournaments')}>На главную</button>
           <button className="primary-button" onClick={() => navigate('/applications')}>Мои заявки</button>

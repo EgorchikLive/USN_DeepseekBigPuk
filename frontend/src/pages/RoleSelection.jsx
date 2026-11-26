@@ -5,13 +5,15 @@ import Layout from '../components/Layout';
 export default function RoleSelection() {
   const navigate = useNavigate();
   const location = useLocation();
+  const profile = location.state?.profile || {};
   const [role, setRole] = useState('');
   const [combined, setCombined] = useState(false);
   const [player, setPlayer] = useState('');
   const [teammate, setTeammate] = useState('');
   const [needTeammate, setNeedTeammate] = useState(false);
-  const isExpress = location.state?.competitionId === '2';
-  const isTeam = location.state?.competitionId === '3';
+  const tournament = location.state?.tournament;
+  const isExpress = tournament?.format?.toLowerCase().includes('экспресс');
+  const isTeam = tournament?.format?.toLowerCase().includes('команд');
   const roles = isExpress || isTeam
     ? [
         ['player', 'Игрок', isTeam ? 'партия в командном турнире' : 'партия в основном турнире'],
@@ -26,7 +28,7 @@ export default function RoleSelection() {
       ];
 
   return (
-    <Layout title="USN · Регистрация участника" rightContent={<span className="header-pill">Название {isExpress ? '2' : isTeam ? '3' : '1'} | {isExpress ? 'экспресс' : isTeam ? 'команда' : 'классика'}</span>}>
+    <Layout title="USN · Регистрация участника" rightContent={<span className="header-pill">{tournament ? `${tournament.title} · ${tournament.format}` : 'Выбор роли'}</span>}>
       <div className="registration-shell" style={{ width: 540, paddingTop: 48 }}>
         <div className="back-step">
           <button className="back-link" onClick={() => navigate(-1)}>← К проверке</button>
@@ -34,7 +36,7 @@ export default function RoleSelection() {
         </div>
         <h2 className="block-title">Блок 2 · Данные и выбор роли</h2>
         <div className="role-card">
-          <div className="profile-name">Иванова Анна Сергеевна</div>
+          <div className="profile-name">{profile.full_name || 'Профиль участника'}</div>
           <span className="role-label">Роль на турнире:</span>
           <div className="role-grid" style={isExpress ? { gridTemplateColumns: 'repeat(3, 1fr)' } : undefined}>
             {roles.map(([value, title, hint]) => (

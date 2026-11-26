@@ -1,84 +1,85 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
-
-const slots = [
-  ['6:20-6:55', '6:55-7:30', '7:30-8:05', '8:05-8:40'],
-  ['9:10-9:45', '9:45-10:20', '10:20-11:15', '11:15-11:55'],
-  ['12:20-12:55', '12:55-13:30', '13:30-14:05', '14:05-14:40'],
-];
+import { fetchTournament, getSpreadsheetError } from '../api/spreadsheet';
 
 export default function SlotChanges() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [confirmed, setConfirmed] = useState(['21.03.2026 · 7:20-8:05', '21.03.2026 · 6:55-7:30']);
-  const [proposed, setProposed] = useState(['21.03.2026 · 8:05-8:40', '22.03.2026 · 8:05-8:40']);
-  const [withdraw, setWithdraw] = useState(null);
-  const [accept, setAccept] = useState(null);
-  const [newSlot, setNewSlot] = useState('22.03.2026 · 6:55-7:30');
-  const [changed, setChanged] = useState(false);
+  const tournamentId = location.state?.competitionId || location.state?.tournament?.id;
+  const [tournament, setTournament] = useState(location.state?.tournament || null);
+  const [selected, setSelected] = useState(location.state?.slots || []);
+  const [loading, setLoading] = useState(Boolean(tournamentId));
+  const [error, setError] = useState(
+    tournamentId ? '' : 'Чтобы изменить слоты, откройте заявку выбранного турнира.',
+  );
 
-  const toggleConfirmed = slot => {
-    setWithdraw(slot);
-  };
+  useEffect(() => {
+    if (!tournamentId) return undefined;
+    let active = true;
+    fetchTournament(tournamentId)
+      .then(data => {
+        if (active) {
+          setTournament(data);
+          setError('');
+        }
+      })
+      .catch(loadError => {
+        if (active) setError(getSpreadsheetError(loadError));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
 
-  const toggleNewSlot = slot => {
-    setNewSlot(current => current === slot ? null : slot);
-    setChanged(true);
+    return () => { active = false; };
+  }, [tournamentId]);
+
+  const slots = useMemo(
+    () => (tournament?.schedule || []).filter(
+      slot => slot.match_count > 0 || slot.assigned_judge_count > 0,
+    ),
+    [tournament],
+  );
+  const selectedSlots = slots.filter(slot => selected.includes(slot.id));
+
+  const toggleSlot = slotId => {
+    setSelected(current => current.includes(slotId)
+      ? current.filter(item => item !== slotId)
+      : [...current, slotId]);
   };
 
   const submit = () => {
-    navigate('/applications');
+    navigate('/register/review', {
+      state: { ...location.state, tournament, slots: selected },
+    });
   };
 
   return (
-    <Layout title="USN · Изменение слотов" rightContent="кликабельный прототип">
+    <Layout title="USN · Изменение слотов">
       <div className="slot-change-page">
         <div className="slot-change-layout">
           <aside className="slot-change-side">
             <section>
-              <h2>Подтвержденные слоты:</h2>
+              <h2>Выбранные слоты:</h2>
               <div className="slot-chip-row">
-                {confirmed.map(slot => (
+                {selectedSlots.length ? selectedSlots.map(slot => (
                   <button
-                    key={slot}
+                    key={slot.id}
                     type="button"
-                    className={`slot-chip confirmed ${withdraw === slot ? 'selected' : ''}`}
-                    onClick={() => toggleConfirmed(slot)}
+                    className="slot-chip confirmed selected"
+                    onClick={() => toggleSlot(slot.id)}
                   >
-                    {slot}
+                    {slot.time} · {slot.phase || 'этап не указан'} ×
                   </button>
-                ))}
+                )) : <span className="spreadsheet-state">Слоты не выбраны</span>}
               </div>
-              {withdraw && (
-                <div className="withdraw-box">
-                  <span>Отменить слот?</span>
-                  <button type="button" onClick={() => { setConfirmed(current => current.filter(item => item !== withdraw)); setWithdraw(null); setChanged(true); }}>Да</button>
-                  <button type="button" onClick={() => setWithdraw(null)}>Нет</button>
-                </div>
-              )}
             </section>
-
             <section>
-              <h2>Предложенные слоты:</h2>
-              <div className="slot-chip-row">
-                {proposed.map(slot => (
-                  <button
-                    key={slot}
-                    type="button"
-                    className={`slot-chip proposed ${accept === slot ? 'accepted' : ''}`}
-                    onClick={() => setAccept(slot)}
-                  >
-                    {slot}
-                  </button>
-                ))}
-              </div>
-              {accept && (
-                <div className="accept-box">
-                  <span>Принять слот?</span>
-                  <button type="button" onClick={() => { setConfirmed(current => [...current, accept]); setProposed(current => current.filter(item => item !== accept)); setAccept(null); setChanged(true); }}>Да</button>
-                  <button type="button" onClick={() => setAccept(null)}>Нет</button>
-                </div>
+              <h2>Данные турнира:</h2>
+              <p>{tournament?.title || 'Турнир из Google Sheets'}</p>
+              <p>{tournament?.dates?.join(' · ') || 'Дата не указана'}</p>
+              {tournament?.dates?.length > 1 && (
+                <p>В листе нет привязки даты к каждому отдельному слоту.</p>
               )}
             </section>
           </aside>
@@ -86,43 +87,38 @@ export default function SlotChanges() {
           <section className="slot-change-card">
             <div className="slot-change-card-header">
               <h2>Доступные слоты</h2>
-              <span>Выберите новые слоты</span>
+              <span>Выберите слоты из расписания таблицы</span>
             </div>
-            {[
-              ['21.03 (сб)', '21.03.2026'],
-              ['22.03 (вс)', '22.03.2026'],
-            ].map(([title, date]) => (
-              <div className="slot-change-day" key={title}>
-                <h3>{title}</h3>
-                {slots.map((row, roundIndex) => (
-                  <div className="slot-change-row" key={roundIndex}>
-                    <strong>круг {roundIndex + 1}</strong>
-                    <div>
-                      {row.map(slot => {
-                        const label = `${date} · ${slot}`;
-                        return (
-                          <button
-                            type="button"
-                            key={slot}
-                            className={`slot-change-pill ${newSlot === label ? 'selected' : ''}`}
-                            onClick={() => toggleNewSlot(label)}
-                          >
-                            {slot}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
+            {loading && <p className="spreadsheet-state">Загружаем расписание...</p>}
+            {error && <p className="spreadsheet-state error" role="alert">{error}</p>}
+            {!loading && !error && slots.length === 0 && (
+              <p className="spreadsheet-state">В расписании нет игровых слотов.</p>
+            )}
+            {!loading && !error && slots.map(slot => (
+              <div className="slot-change-row" key={slot.id}>
+                <strong>{slot.phase || 'Этап не указан'}</strong>
+                <div>
+                  <button
+                    type="button"
+                    className={`slot-change-pill ${selected.includes(slot.id) ? 'selected' : ''}`}
+                    aria-pressed={selected.includes(slot.id)}
+                    onClick={() => toggleSlot(slot.id)}
+                  >
+                    {slot.time}
+                  </button>
+                </div>
               </div>
             ))}
           </section>
         </div>
-        <button className="primary-button slot-change-submit" onClick={submit}>
-          {changed ? 'Отправить изменения' : 'Назад'}
+        <button
+          className="primary-button slot-change-submit"
+          disabled={loading || Boolean(error)}
+          onClick={submit}
+        >
+          Сохранить выбор
         </button>
       </div>
-      <footer className="slot-change-footer">Стек: USN (Django) · FastAPI · ИИ-распределение судей · PostgreSQL</footer>
     </Layout>
   );
 }
