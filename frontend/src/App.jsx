@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import StartScreen from './pages/StartScreen';
 import TournamentsList from './pages/TournamentsList';
 import RegistrationEmail from './pages/RegistrationEmail';
@@ -33,8 +33,13 @@ function App() {
         <Route path="/applications" element={<MyApplications />} />
         <Route path="/slots/change" element={<SlotChanges />} />
         <Route path="/register/already" element={<AlreadyRegistered />} />
-        <Route path="/organizer" element={<OrganizerDashboard />} />
+        <Route path="/organizer" element={<Navigate to="/organizer/tournaments" replace />} />
         <Route path="/organizer/tournaments" element={<OrganizerTournaments />} />
+        <Route path="/organizer/tournaments/:competitionId/slots/:slotId" element={<OrganizerDashboard />} />
+        <Route path="/organizer/tournaments/:competitionId" element={<OrganizerDashboard />} />
+        <Route path="/organizer/tournaments/:competitionId/applications" element={<JudgeApplications />} />
+        <Route path="/organizer/tournaments/:competitionId/applications/:applicationId" element={<JudgeApplicationDetail />} />
+        <Route path="/organizer/tournaments/:competitionId/saved" element={<OrganizerSaved />} />
         <Route path="/organizer/saved" element={<OrganizerSaved />} />
         <Route path="/judge-applications" element={<JudgeApplications />} />
         <Route path="/judge-applications/:applicationId" element={<JudgeApplicationDetail />} />

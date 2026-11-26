@@ -14,7 +14,7 @@ export default function OrganizerTournaments() {
       <div className="organizer-tournaments">
         <h1>Список турниров</h1>
         <div className="organizer-tournament-grid">
-          {tournaments.map((item, index) => (
+          {tournaments.map((item) => (
             <article className={`organizer-tournament-card ${item.active === false ? 'disabled' : ''}`} key={item.id}>
               <h2>{item.title}</h2>
               <span className="organizer-format">{item.format}</span>
@@ -28,7 +28,7 @@ export default function OrganizerTournaments() {
               <button
                 className="primary-button"
                 disabled={item.active === false}
-                onClick={() => navigate('/organizer', { state: { tournament: item } })}
+                onClick={() => navigate(`/organizer/tournaments/${item.id}`, { state: { tournament: item } })}
               >
                 Перейти
               </button>

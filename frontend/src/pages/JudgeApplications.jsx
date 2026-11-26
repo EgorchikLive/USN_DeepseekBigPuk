@@ -1,5 +1,5 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 
 const data = [
@@ -22,18 +22,36 @@ const data = [
 
 export default function JudgeApplications() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { competitionId } = useParams();
+  const flowState = location.state || {};
+  const organizerPath = flowState.returnTo || (
+    competitionId
+      ? `/organizer/tournaments/${competitionId}`
+      : '/organizer/tournaments'
+  );
+
   return (
     <Layout title="USN · Заявки судей" rightContent="кликабельный прототип">
       <div className="judge-applications-page">
         <div className="judge-applications-toolbar">
-          <button onClick={() => navigate('/organizer')}>← Назад</button>
+          <button onClick={() => navigate(organizerPath)}>← Назад</button>
           <span>Выбранная роль: судья</span>
         </div>
         {data.map(group => (
           <section className="judge-application-group" key={group.section}>
             <h2>{group.section}</h2>
             {group.rows.map(row => (
-              <button className="judge-application-row" key={row.id} onClick={() => navigate(`/judge-applications/${row.id}`, { state: row })}>
+              <button
+                className="judge-application-row"
+                key={row.id}
+                onClick={() => navigate(
+                  competitionId
+                    ? `/organizer/tournaments/${competitionId}/applications/${row.id}`
+                    : `/judge-applications/${row.id}`,
+                  { state: { ...row, ...flowState } },
+                )}
+              >
                 <strong>{row.name}</strong>
                 <span>{row.id === 'new' ? 'Кубок «Осень-2026» · классика' : 'Кубок «Осень-2026» · классика'}</span>
                 <b className={`judge-status ${row.type}`}>{row.status}</b>

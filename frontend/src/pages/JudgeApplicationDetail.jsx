@@ -1,19 +1,81 @@
 import { useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import Layout from '../components/Layout';
+import apiClient from '../api/client';
 
 export default function JudgeApplicationDetail() {
   const navigate = useNavigate();
   const location = useLocation();
-  const params = useParams();
-  const initial = location.state || {};
+  const { applicationId, competitionId } = useParams();
+  const defaultTypes = {
+    new: 'new',
+    withdraw: 'withdraw',
+    yes: 'yes',
+    no: 'no',
+    wait1: 'wait',
+    wait2: 'wait',
+  };
+  const initial = location.state || { type: defaultTypes[applicationId] || 'new' };
   const [answer, setAnswer] = useState(initial.type === 'yes' ? 'yes' : initial.type === 'no' ? 'no' : initial.type === 'wait' ? 'wait' : '');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
 
   const isWithdraw = initial.type === 'withdraw';
+  const organizerPath = initial.returnTo || (
+    competitionId
+      ? `/organizer/tournaments/${competitionId}`
+      : '/organizer/tournaments'
+  );
+  const competitionUuid = competitionId === 'express'
+    ? '00000000-0000-0000-0000-000000000002'
+    : '00000000-0000-0000-0000-000000000001';
+
+  const handleSubmit = async () => {
+    if (!initial.allocationSlots?.length) {
+      setSubmitError('Нет данных сетки. Откройте заявку из выбранного турнира организатора.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setSubmitError('');
+    try {
+      const { data: aiResult } = await apiClient.post('/allocate', {
+        competition_id: competitionUuid,
+        action: 'recalculate',
+        slots: initial.allocationSlots,
+        selected_slot: initial.selectedSlot ? {
+          committee: initial.selectedSlot.committee,
+          date: initial.selectedSlot.date,
+          round: initial.selectedSlot.round,
+          required_judges: initial.selectedSlot.required_judges,
+          confirmed_judges: initial.selectedSlot.confirmed_judges,
+        } : null,
+      });
+      navigate(organizerPath, {
+        state: {
+          applicationUpdated: applicationId,
+          answer,
+          tournament: initial.tournament,
+          selectedSlot: initial.selectedSlot,
+          mapData: initial.mapData,
+          aiResult,
+        },
+      });
+    } catch (error) {
+      const detail = error.response?.data?.detail;
+      setSubmitError(typeof detail === 'string'
+        ? detail
+        : error.response?.status
+          ? `Ошибка API (${error.response.status}). Проверьте настройки LLM и backend.`
+          : 'Backend недоступен. Запустите FastAPI из папки backend на порту 8000.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
   const name = initial.name || 'Новиков Кирилл Витальевич';
   const confirmed = isWithdraw
     ? ['21.03.2026 · 1 круг', '21.03.2026 · 3 круг']
-    : ['21.03.2026 · 7:30-8:05', '21.03.2026 · 7:30-8:05'];
+    : ['21.03.2026 · 7:30-8:05', '21.03.2026 · 12:20-12:55'];
 
   return (
     <Layout title="USN · Заявки судей" rightContent="кликабельный прототип">
@@ -32,9 +94,9 @@ export default function JudgeApplicationDetail() {
           </section>
 
           <section className="judge-detail-slots">
-            <h2>Подтвержденные слоты:</h2>
+              <h2>{initial.type === 'new' ? 'Желаемые слоты:' : 'Подтвержденные слоты:'}</h2>
             <div className="judge-slot-chips">
-              {confirmed.map(slot => <span key={slot}>{slot}</span>)}
+                {confirmed.map((slot, index) => <span key={`${slot}-${index}`}>{slot}</span>)}
             </div>
 
             {isWithdraw && (
@@ -80,11 +142,16 @@ export default function JudgeApplicationDetail() {
             {initial.type === 'wait' && (
               <div className="judge-detail-actions">
                 <button onClick={() => setAnswer('no')}>Отменить предложение</button>
-                <button onClick={() => navigate('/judge-applications')}>Предложить слоты</button>
+                <button onClick={() => navigate(-1)}>Предложить слоты</button>
               </div>
             )}
-            <button className="primary-button judge-detail-submit" onClick={() => navigate('/organizer')}>
-              Принять и пересчитать сетку
+            {submitError && <p className="judge-detail-error" role="alert">{submitError}</p>}
+            <button
+              className="primary-button judge-detail-submit"
+              onClick={handleSubmit}
+              disabled={!answer || isSubmitting}
+            >
+              {isSubmitting ? 'Пересчитываем сетку...' : 'Принять и пересчитать сетку'}
             </button>
           </section>
         </div>
